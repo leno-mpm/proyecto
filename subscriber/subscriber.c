@@ -18,7 +18,7 @@ void* listener_thread(void* arg) {
     while (1) {
         memset(buffer, 0, sizeof(buffer));
         int r = recv(server_socket, buffer, sizeof(buffer), 0);
-        
+
         if (r <= 0) {
             printf("[SUBSCRIBER] Desconectado del broker.\n");
             close(server_socket);
@@ -36,13 +36,12 @@ void* listener_thread(void* arg) {
 // ==============================
 int main(int argc, char* argv[]) {
     if (argc < 4) {
-        printf("Uso: %s <ip_broker> <puerto> <topic>\n", argv[0]);
+        printf("Uso: %s <ip_broker> <puerto> <topic1> [topic2] [topic3] ...\n", argv[0]);
         return 1;
     }
 
     const char* ip = argv[1];
     int port = atoi(argv[2]);
-    const char* topic = argv[3];
 
     // Crear socket
     server_socket = socket(AF_INET, SOCK_STREAM, 0);
@@ -60,12 +59,15 @@ int main(int argc, char* argv[]) {
 
     printf("[SUBSCRIBER] Conectado al broker %s:%d\n", ip, port);
 
-    // Enviar comando SUBSCRIBE
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd), "SUBSCRIBE %s\n", topic);
-    send(server_socket, cmd, strlen(cmd), 0);
-
-    printf("[SUBSCRIBER] Suscrito al topic: %s\n", topic);
+    // ============================================
+    // Enviar SUBSCRIBE por cada topic ingresado
+    // ============================================
+    for (int i = 3; i < argc; i++) {
+        char cmd[256];
+        snprintf(cmd, sizeof(cmd), "SUBSCRIBE %s\n", argv[i]);
+        send(server_socket, cmd, strlen(cmd), 0);
+        printf("[SUBSCRIBER] Suscrito al topic: %s\n", argv[i]);
+    }
 
     // Lanzar hilo listener
     pthread_t th;
@@ -79,3 +81,4 @@ int main(int argc, char* argv[]) {
 
     return 0;
 }
+

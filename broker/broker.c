@@ -70,7 +70,7 @@ static void* client_thread(void* arg) {
 
     printf("[BROKER] Nuevo cliente conectado (socket %d)\n", client_socket);
 
-    while (1) {
+	while (1) {
         memset(buffer, 0, sizeof(buffer));
         int r = recv(client_socket, buffer, sizeof(buffer), 0);
 
@@ -90,10 +90,17 @@ static void* client_thread(void* arg) {
 
         // ------------------- SUBSCRIBE -------------------
         else if (strncmp(buffer, "SUBSCRIBE", 9) == 0) {
-            char topic[128];
-            sscanf(buffer, "SUBSCRIBE %s", topic);
-            add_subscriber(broker, client_socket, topic);
-            send(client_socket, "OK SUBSCRIBED\n", 14, 0);
+            char* line = strtok(buffer, "\n");
+
+		    while (line != NULL) {
+		        if (strncmp(line, "SUBSCRIBE", 9) == 0) {
+		            char topic[128];
+		            sscanf(line, "SUBSCRIBE %s", topic);
+		            add_subscriber(broker, client_socket, topic);
+		            send(client_socket, "OK SUBSCRIBED\n", 14, 0);
+		        }
+		        line = strtok(NULL, "\n");
+		    }
         }
 
         // ------------------- PUBLISH -------------------
@@ -123,7 +130,9 @@ static void* client_thread(void* arg) {
         }
 
         else {
+        	
             printf("[BROKER] Comando desconocido: %s\n", buffer);
+            send(client_socket, "ERROR: Unknown command\n", 23, 0);
         }
     }
 }
