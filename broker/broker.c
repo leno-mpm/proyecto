@@ -4,7 +4,6 @@
 #include <string.h>
 #include <unistd.h>
 #include <arpa/inet.h>
-#include <time.h>
 
 // =========================================================
 // MANEJO DE LISTAS
@@ -17,13 +16,25 @@ static void add_gateway(Broker* broker, int socket, const char* id) {
     g->next = NULL;
 
     pthread_mutex_lock(&broker->mutex_gateways);
-
     g->next = broker->gateways;
     broker->gateways = g;
-
     pthread_mutex_unlock(&broker->mutex_gateways);
 
     printf("[BROKER] Gateway registrado: %s\n", id);
+}
+
+static void add_subscriber(Broker* broker, int socket, const char* topic) {
+    SubscriberClient* s = malloc(sizeof(SubscriberClient));
+    s->socket = socket;
+    strncpy(s->topic, topic, MAX_TOPIC_LEN);
+    s->next = NULL;
+
+    pthread_mutex_lock(&broker->mutex_subscribers);
+    s->next = broker->subscribers;
+    broker->subscribers = s;
+    pthread_mutex_unlock(&broker->mutex_subscribers);
+
+    printf("[BROKER] Nuevo SUBSCRIBER al topic '%s' (socket %d)\n", topic, socket);
 }
 
 static void save_message(Broker* broker, const char* topic, const char* data) {
@@ -34,10 +45,8 @@ static void save_message(Broker* broker, const char* topic, const char* data) {
     m->next = NULL;
 
     pthread_mutex_lock(&broker->mutex_history);
-
     m->next = broker->history;
     broker->history = m;
-
     pthread_mutex_unlock(&broker->mutex_history);
 }
 
@@ -59,7 +68,7 @@ static void* client_thread(void* arg) {
 
     char buffer[1024];
 
-    printf("[BROKER] Nuevo thread manejando cliente (socket %d)\n", client_socket);
+    printf("[BROKER] Nuevo cliente conectado (socket %d)\n", client_socket);
 
     while (1) {
         memset(buffer, 0, sizeof(buffer));
@@ -71,6 +80,7 @@ static void* client_thread(void* arg) {
             return NULL;
         }
 
+        // ------------------- REGISTER -------------------
         if (strncmp(buffer, "REGISTER GATEWAY", 16) == 0) {
             char id[64];
             sscanf(buffer, "REGISTER GATEWAY %s", id);
@@ -78,6 +88,15 @@ static void* client_thread(void* arg) {
             send(client_socket, "OK REGISTERED\n", 14, 0);
         }
 
+        // ------------------- SUBSCRIBE -------------------
+        else if (strncmp(buffer, "SUBSCRIBE", 9) == 0) {
+            char topic[128];
+            sscanf(buffer, "SUBSCRIBE %s", topic);
+            add_subscriber(broker, client_socket, topic);
+            send(client_socket, "OK SUBSCRIBED\n", 14, 0);
+        }
+
+        // ------------------- PUBLISH -------------------
         else if (strncmp(buffer, "PUBLISH", 7) == 0) {
             char topic[128], data[512];
             sscanf(buffer, "PUBLISH %s %512[^\n]", topic, data);
@@ -87,6 +106,20 @@ static void* client_thread(void* arg) {
             printf("         Data:  %s\n\n", data);
 
             save_message(broker, topic, data);
+
+            // Reenviar a suscriptores
+            pthread_mutex_lock(&broker->mutex_subscribers);
+            SubscriberClient* s = broker->subscribers;
+
+            while (s != NULL) {
+                if (strcmp(s->topic, topic) == 0) {
+                    char msg[1024];
+                    snprintf(msg, sizeof(msg), "%s %s\n", topic, data);
+                    send(s->socket, msg, strlen(msg), 0);
+                }
+                s = s->next;
+            }
+            pthread_mutex_unlock(&broker->mutex_subscribers);
         }
 
         else {
@@ -103,10 +136,12 @@ static void* client_thread(void* arg) {
 int broker_init(Broker* broker, int port) {
     broker->port = port;
     broker->gateways = NULL;
+    broker->subscribers = NULL;
     broker->history = NULL;
     broker->running = 1;
 
     pthread_mutex_init(&broker->mutex_gateways, NULL);
+    pthread_mutex_init(&broker->mutex_subscribers, NULL);
     pthread_mutex_init(&broker->mutex_history, NULL);
 
     return 1;
@@ -114,7 +149,6 @@ int broker_init(Broker* broker, int port) {
 
 void broker_start(Broker* broker) {
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
-
     broker->server_socket = server_fd;
 
     struct sockaddr_in addr;
@@ -130,9 +164,9 @@ void broker_start(Broker* broker) {
     while (broker->running) {
         struct sockaddr_in client;
         socklen_t c = sizeof(client);
-
         int client_socket = accept(server_fd, (struct sockaddr*)&client, &c);
-        printf("[BROKER] Nueva conexión aceptada (socket %d)\n", client_socket);
+
+        printf("[BROKER] Nueva conexión (socket %d)\n", client_socket);
 
         ClientArgs* args = malloc(sizeof(ClientArgs));
         args->broker = broker;
@@ -151,6 +185,7 @@ void broker_stop(Broker* broker) {
 void broker_cleanup(Broker* broker) {
     close(broker->server_socket);
     pthread_mutex_destroy(&broker->mutex_gateways);
+    pthread_mutex_destroy(&broker->mutex_subscribers);
     pthread_mutex_destroy(&broker->mutex_history);
 }
 
